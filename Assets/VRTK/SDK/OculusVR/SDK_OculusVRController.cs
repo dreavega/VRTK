@@ -1,17 +1,37 @@
-﻿// Fallback Controller|SDK_Fallback|003
+﻿// OculusVR Controller|SDK_OculusVR|003
 namespace VRTK
 {
+#if VRTK_SDK_OCULUSVR
     using UnityEngine;
     using System.Collections.Generic;
 
     /// <summary>
-    /// The Base Controller SDK script provides a bridge to SDK methods that deal with the input devices.
+    /// The OculusVR Controller SDK script provides a bridge to SDK methods that deal with the input devices.
     /// </summary>
-    /// <remarks>
-    /// This is the fallback class that will just return default values.
-    /// </remarks>
-    public class SDK_FallbackController : SDK_BaseController
+    public class SDK_OculusVRController : SDK_BaseController
     {
+        private bool floorLevelSet = false;
+        private VRTK_TrackedController cachedLeftController;
+        private VRTK_TrackedController cachedRightController;
+        private OVRInput.Controller[] touchControllers = new OVRInput.Controller[] { OVRInput.Controller.LTouch, OVRInput.Controller.RTouch };
+        private OVRInput.RawAxis2D[] touchpads = new OVRInput.RawAxis2D[] { OVRInput.RawAxis2D.LThumbstick, OVRInput.RawAxis2D.RThumbstick };
+        private OVRInput.RawAxis1D[] triggers = new OVRInput.RawAxis1D[] { OVRInput.RawAxis1D.LIndexTrigger, OVRInput.RawAxis1D.RIndexTrigger };
+        private OVRInput.RawAxis1D[] grips = new OVRInput.RawAxis1D[] { OVRInput.RawAxis1D.LHandTrigger, OVRInput.RawAxis1D.RHandTrigger };
+
+        private Quaternion[] previousControllerRotations = new Quaternion[2];
+        private Quaternion[] currentControllerRotations = new Quaternion[2];
+
+        private bool[] previousHairTriggerState = new bool[2];
+        private bool[] currentHairTriggerState = new bool[2];
+
+        private bool[] previousHairGripState = new bool[2];
+        private bool[] currentHairGripState = new bool[2];
+
+        private float[] hairTriggerLimit = new float[2];
+        private float[] hairGripLimit = new float[2];
+
+        private OVRHapticsClip hapticsProceduralClip = new OVRHapticsClip();
+
         /// <summary>
         /// The ProcessUpdate method enables an SDK to run logic for every Unity Update
         /// </summary>
@@ -19,6 +39,12 @@ namespace VRTK
         /// <param name="options">A dictionary of generic options that can be used to within the update.</param>
         public override void ProcessUpdate(uint index, Dictionary<string, object> options)
         {
+            var device = GetTrackedObject(GetControllerByIndex(index));
+            previousControllerRotations[index] = currentControllerRotations[index];
+            currentControllerRotations[index] = device.transform.rotation;
+
+            UpdateHairValues(index, GetTriggerAxisOnIndex(index).x, GetTriggerHairlineDeltaOnIndex(index), ref previousHairTriggerState[index], ref currentHairTriggerState[index], ref hairTriggerLimit[index]);
+            UpdateHairValues(index, GetGripAxisOnIndex(index).x, GetGripHairlineDeltaOnIndex(index), ref previousHairGripState[index], ref currentHairGripState[index], ref hairGripLimit[index]);
         }
 
         /// <summary>
@@ -27,7 +53,7 @@ namespace VRTK
         /// <returns>A path to the resource that contains the collider GameObject.</returns>
         public override string GetControllerDefaultColliderPath()
         {
-            return "";
+            return "ControllerColliders/Fallback";
         }
 
         /// <summary>
@@ -39,7 +65,8 @@ namespace VRTK
         /// <returns>A string containing the path to the game object that the controller element resides in.</returns>
         public override string GetControllerElementPath(ControllerElements element, ControllerHand hand, bool fullPath = false)
         {
-            return "";
+            //TODO: NOT IMPLEMENTED
+            return null;
         }
 
         /// <summary>
@@ -49,7 +76,8 @@ namespace VRTK
         /// <returns>The index of the given controller.</returns>
         public override uint GetControllerIndex(GameObject controller)
         {
-            return uint.MaxValue;
+            var trackedObject = GetTrackedObject(controller);
+            return (trackedObject ? trackedObject.index : uint.MaxValue);
         }
 
         /// <summary>
@@ -60,6 +88,20 @@ namespace VRTK
         /// <returns></returns>
         public override GameObject GetControllerByIndex(uint index, bool actual = false)
         {
+            SetTrackedControllerCaches();
+            var sdkManager = VRTK_SDKManager.instance;
+            if (sdkManager != null)
+            {
+                if (cachedLeftController != null && cachedLeftController.index == index)
+                {
+                    return (actual ? sdkManager.actualLeftController : sdkManager.scriptAliasLeftController);
+                }
+
+                if (cachedRightController != null && cachedRightController.index == index)
+                {
+                    return (actual ? sdkManager.actualRightController : sdkManager.scriptAliasRightController);
+                }
+            }
             return null;
         }
 
@@ -70,7 +112,7 @@ namespace VRTK
         /// <returns>A Transform containing the origin of the controller.</returns>
         public override Transform GetControllerOrigin(GameObject controller)
         {
-            return null;
+            return VRTK_SDK_Bridge.GetPlayArea();
         }
 
         /// <summary>
@@ -89,7 +131,12 @@ namespace VRTK
         /// <returns>The GameObject containing the left hand controller.</returns>
         public override GameObject GetControllerLeftHand(bool actual = false)
         {
-            return null;
+            var controller = GetSDKManagerControllerLeftHand(actual);
+            if (!controller && actual)
+            {
+                controller = GameObject.Find("OVRCameraRig/TrackingSpace/LeftHandAnchor");
+            }
+            return controller;
         }
 
         /// <summary>
@@ -99,7 +146,12 @@ namespace VRTK
         /// <returns>The GameObject containing the right hand controller.</returns>
         public override GameObject GetControllerRightHand(bool actual = false)
         {
-            return null;
+            var controller = GetSDKManagerControllerRightHand(actual);
+            if (!controller && actual)
+            {
+                controller = GameObject.Find("OVRCameraRig/TrackingSpace/RightHandAnchor");
+            }
+            return controller;
         }
 
         /// <summary>
@@ -109,7 +161,7 @@ namespace VRTK
         /// <returns>Returns true if the given controller is the left hand controller.</returns>
         public override bool IsControllerLeftHand(GameObject controller)
         {
-            return false;
+            return CheckActualOrScriptAliasControllerIsLeftHand(controller);
         }
 
         /// <summary>
@@ -119,7 +171,7 @@ namespace VRTK
         /// <returns>Returns true if the given controller is the right hand controller.</returns>
         public override bool IsControllerRightHand(GameObject controller)
         {
-            return false;
+            return CheckActualOrScriptAliasControllerIsRightHand(controller);
         }
 
         /// <summary>
@@ -130,7 +182,7 @@ namespace VRTK
         /// <returns>Returns true if the given controller is the left hand controller.</returns>
         public override bool IsControllerLeftHand(GameObject controller, bool actual)
         {
-            return false;
+            return CheckControllerLeftHand(controller, actual);
         }
 
         /// <summary>
@@ -141,7 +193,7 @@ namespace VRTK
         /// <returns>Returns true if the given controller is the right hand controller.</returns>
         public override bool IsControllerRightHand(GameObject controller, bool actual)
         {
-            return false;
+            return CheckControllerRightHand(controller, actual);
         }
 
         /// <summary>
@@ -151,7 +203,7 @@ namespace VRTK
         /// <returns>The GameObject that has the model alias within it.</returns>
         public override GameObject GetControllerModel(GameObject controller)
         {
-            return null;
+            return GetControllerModelFromController(controller);
         }
 
         /// <summary>
@@ -161,7 +213,22 @@ namespace VRTK
         /// <returns>The GameObject that has the model alias within it.</returns>
         public override GameObject GetControllerModel(ControllerHand hand)
         {
-            return null;
+            var model = GetSDKManagerControllerModelForHand(hand);
+            if (!model)
+            {
+                switch (hand)
+                {
+                    case ControllerHand.Left:
+                        model = GameObject.Find("OVRCameraRig/TrackingSpace/LeftHandAnchor");
+                        model = (model.transform.childCount > 0 ? model.transform.GetChild(0).gameObject : null);
+                        break;
+                    case ControllerHand.Right:
+                        model = GameObject.Find("OVRCameraRig/TrackingSpace/RightHandAnchor");
+                        model = (model.transform.childCount > 0 ? model.transform.GetChild(0).gameObject : null);
+                        break;
+                }
+            }
+            return model;
         }
 
         /// <summary>
@@ -171,6 +238,7 @@ namespace VRTK
         /// <returns>A GameObject containing the object that has a render model for the controller.</returns>
         public override GameObject GetControllerRenderModel(GameObject controller)
         {
+            //TODO: NOT IMPLEMENTED
             return null;
         }
 
@@ -190,6 +258,20 @@ namespace VRTK
         /// <param name="durationMicroSec">The amount of microseconds to run the haptic pulse for.</param>
         public override void HapticPulseOnIndex(uint index, ushort durationMicroSec = 500)
         {
+            if (index < uint.MaxValue)
+            {
+                var convertedDuration = (durationMicroSec / 3999f);
+                var controller = GetControllerByIndex(index);
+                hapticsProceduralClip.WriteSample((byte)(convertedDuration * byte.MaxValue));
+                if (IsControllerLeftHand(controller))
+                {
+                    OVRHaptics.LeftChannel.Preempt(hapticsProceduralClip);
+                }
+                else if (IsControllerRightHand(controller))
+                {
+                    OVRHaptics.RightChannel.Preempt(hapticsProceduralClip);
+                }
+            }
         }
 
         /// <summary>
@@ -199,7 +281,12 @@ namespace VRTK
         /// <returns>A Vector3 containing the current velocity of the tracked object.</returns>
         public override Vector3 GetVelocityOnIndex(uint index)
         {
-            return Vector3.zero;
+            if (index >= uint.MaxValue)
+            {
+                return Vector3.zero;
+            }
+            var device = GetTrackedObject(GetControllerByIndex(index));
+            return OVRInput.GetLocalControllerVelocity(touchControllers[device.index]);
         }
 
         /// <summary>
@@ -209,7 +296,13 @@ namespace VRTK
         /// <returns>A Vector3 containing the current angular velocity of the tracked object.</returns>
         public override Vector3 GetAngularVelocityOnIndex(uint index)
         {
-            return Vector3.zero;
+            if (index >= uint.MaxValue)
+            {
+                return Vector3.zero;
+            }
+
+            var deltaRotation = currentControllerRotations[index] * Quaternion.Inverse(previousControllerRotations[index]);
+            return new Vector3(Mathf.DeltaAngle(0, deltaRotation.eulerAngles.x), Mathf.DeltaAngle(0, deltaRotation.eulerAngles.y), Mathf.DeltaAngle(0, deltaRotation.eulerAngles.z));
         }
 
         /// <summary>
@@ -219,7 +312,12 @@ namespace VRTK
         /// <returns>A Vector2 containing the current x,y position of where the touchpad is being touched.</returns>
         public override Vector2 GetTouchpadAxisOnIndex(uint index)
         {
-            return Vector2.zero;
+            if (index >= uint.MaxValue)
+            {
+                return Vector2.zero;
+            }
+            var device = GetTrackedObject(GetControllerByIndex(index));
+            return (device ? OVRInput.Get(touchpads[index], touchControllers[index]) : Vector2.zero);
         }
 
         /// <summary>
@@ -229,6 +327,17 @@ namespace VRTK
         /// <returns>A Vector2 containing the current position of the trigger.</returns>
         public override Vector2 GetTriggerAxisOnIndex(uint index)
         {
+            if (index >= uint.MaxValue)
+            {
+                return Vector2.zero;
+            }
+            var device = GetTrackedObject(GetControllerByIndex(index));
+            if (device)
+            {
+                var output = OVRInput.Get(triggers[index], touchControllers[index]);
+                return new Vector2(output, 0f);
+            }
+
             return Vector2.zero;
         }
 
@@ -239,6 +348,17 @@ namespace VRTK
         /// <returns>A Vector2 containing the current position of the grip.</returns>
         public override Vector2 GetGripAxisOnIndex(uint index)
         {
+            if (index >= uint.MaxValue)
+            {
+                return Vector2.zero;
+            }
+            var device = GetTrackedObject(GetControllerByIndex(index));
+            if (device)
+            {
+                var output = OVRInput.Get(grips[index], touchControllers[index]);
+                return new Vector2(output, 0f);
+            }
+
             return Vector2.zero;
         }
 
@@ -249,7 +369,11 @@ namespace VRTK
         /// <returns>The delta between the trigger presses.</returns>
         public override float GetTriggerHairlineDeltaOnIndex(uint index)
         {
-            return 0f;
+            if (index >= uint.MaxValue)
+            {
+                return 0f;
+            }
+            return 0.1f;
         }
 
         /// <summary>
@@ -259,7 +383,11 @@ namespace VRTK
         /// <returns>The delta between the grip presses.</returns>
         public override float GetGripHairlineDeltaOnIndex(uint index)
         {
-            return 0f;
+            if (index >= uint.MaxValue)
+            {
+                return 0f;
+            }
+            return 0.1f;
         }
 
         /// <summary>
@@ -269,7 +397,7 @@ namespace VRTK
         /// <returns>Returns true if the button is continually being pressed.</returns>
         public override bool IsTriggerPressedOnIndex(uint index)
         {
-            return false;
+            return IsButtonPressed(index, ButtonPressTypes.Press, OVRInput.Button.PrimaryIndexTrigger);
         }
 
         /// <summary>
@@ -279,7 +407,7 @@ namespace VRTK
         /// <returns>Returns true if the button has just been pressed down.</returns>
         public override bool IsTriggerPressedDownOnIndex(uint index)
         {
-            return false;
+            return IsButtonPressed(index, ButtonPressTypes.PressDown, OVRInput.Button.PrimaryIndexTrigger);
         }
 
         /// <summary>
@@ -289,7 +417,7 @@ namespace VRTK
         /// <returns>Returns true if the button has just been released.</returns>
         public override bool IsTriggerPressedUpOnIndex(uint index)
         {
-            return false;
+            return IsButtonPressed(index, ButtonPressTypes.PressUp, OVRInput.Button.PrimaryIndexTrigger);
         }
 
         /// <summary>
@@ -299,7 +427,7 @@ namespace VRTK
         /// <returns>Returns true if the button is continually being touched.</returns>
         public override bool IsTriggerTouchedOnIndex(uint index)
         {
-            return false;
+            return IsButtonPressed(index, ButtonPressTypes.Touch, OVRInput.Touch.PrimaryIndexTrigger);
         }
 
         /// <summary>
@@ -309,7 +437,7 @@ namespace VRTK
         /// <returns>Returns true if the button has just been touched down.</returns>
         public override bool IsTriggerTouchedDownOnIndex(uint index)
         {
-            return false;
+            return IsButtonPressed(index, ButtonPressTypes.TouchDown, OVRInput.Touch.PrimaryIndexTrigger);
         }
 
         /// <summary>
@@ -319,7 +447,7 @@ namespace VRTK
         /// <returns>Returns true if the button has just been released.</returns>
         public override bool IsTriggerTouchedUpOnIndex(uint index)
         {
-            return false;
+            return IsButtonPressed(index, ButtonPressTypes.TouchUp, OVRInput.Touch.PrimaryIndexTrigger);
         }
 
         /// <summary>
@@ -329,7 +457,11 @@ namespace VRTK
         /// <returns>Returns true if the button has passed it's press threshold.</returns>
         public override bool IsHairTriggerDownOnIndex(uint index)
         {
-            return false;
+            if (index >= uint.MaxValue)
+            {
+                return false;
+            }
+            return (currentHairTriggerState[index] && !previousHairTriggerState[index]);
         }
 
         /// <summary>
@@ -339,7 +471,11 @@ namespace VRTK
         /// <returns>Returns true if the button has just been released from it's press threshold.</returns>
         public override bool IsHairTriggerUpOnIndex(uint index)
         {
-            return false;
+            if (index >= uint.MaxValue)
+            {
+                return false;
+            }
+            return (!currentHairTriggerState[index] && previousHairTriggerState[index]);
         }
 
         /// <summary>
@@ -349,7 +485,7 @@ namespace VRTK
         /// <returns>Returns true if the button is continually being pressed.</returns>
         public override bool IsGripPressedOnIndex(uint index)
         {
-            return false;
+            return IsButtonPressed(index, ButtonPressTypes.Press, OVRInput.Button.PrimaryHandTrigger);
         }
 
         /// <summary>
@@ -359,7 +495,7 @@ namespace VRTK
         /// <returns>Returns true if the button has just been pressed down.</returns>
         public override bool IsGripPressedDownOnIndex(uint index)
         {
-            return false;
+            return IsButtonPressed(index, ButtonPressTypes.PressDown, OVRInput.Button.PrimaryHandTrigger);
         }
 
         /// <summary>
@@ -369,7 +505,7 @@ namespace VRTK
         /// <returns>Returns true if the button has just been released.</returns>
         public override bool IsGripPressedUpOnIndex(uint index)
         {
-            return false;
+            return IsButtonPressed(index, ButtonPressTypes.PressUp, OVRInput.Button.PrimaryHandTrigger);
         }
 
         /// <summary>
@@ -379,7 +515,7 @@ namespace VRTK
         /// <returns>Returns true if the button is continually being touched.</returns>
         public override bool IsGripTouchedOnIndex(uint index)
         {
-            return false;
+            return IsButtonPressed(index, ButtonPressTypes.Touch, OVRInput.Button.PrimaryHandTrigger);
         }
 
         /// <summary>
@@ -389,7 +525,7 @@ namespace VRTK
         /// <returns>Returns true if the button has just been touched down.</returns>
         public override bool IsGripTouchedDownOnIndex(uint index)
         {
-            return false;
+            return IsButtonPressed(index, ButtonPressTypes.TouchDown, OVRInput.Button.PrimaryHandTrigger);
         }
 
         /// <summary>
@@ -399,7 +535,7 @@ namespace VRTK
         /// <returns>Returns true if the button has just been released.</returns>
         public override bool IsGripTouchedUpOnIndex(uint index)
         {
-            return false;
+            return IsButtonPressed(index, ButtonPressTypes.TouchUp, OVRInput.Button.PrimaryHandTrigger);
         }
 
         /// <summary>
@@ -409,7 +545,11 @@ namespace VRTK
         /// <returns>Returns true if the button has passed it's press threshold.</returns>
         public override bool IsHairGripDownOnIndex(uint index)
         {
-            return false;
+            if (index >= uint.MaxValue)
+            {
+                return false;
+            }
+            return (currentHairGripState[index] && !previousHairGripState[index]);
         }
 
         /// <summary>
@@ -419,7 +559,11 @@ namespace VRTK
         /// <returns>Returns true if the button has just been released from it's press threshold.</returns>
         public override bool IsHairGripUpOnIndex(uint index)
         {
-            return false;
+            if (index >= uint.MaxValue)
+            {
+                return false;
+            }
+            return (!currentHairGripState[index] && previousHairGripState[index]);
         }
 
         /// <summary>
@@ -429,7 +573,7 @@ namespace VRTK
         /// <returns>Returns true if the button is continually being pressed.</returns>
         public override bool IsTouchpadPressedOnIndex(uint index)
         {
-            return false;
+            return IsButtonPressed(index, ButtonPressTypes.Press, OVRInput.Button.PrimaryThumbstick);
         }
 
         /// <summary>
@@ -439,7 +583,7 @@ namespace VRTK
         /// <returns>Returns true if the button has just been pressed down.</returns>
         public override bool IsTouchpadPressedDownOnIndex(uint index)
         {
-            return false;
+            return IsButtonPressed(index, ButtonPressTypes.PressDown, OVRInput.Button.PrimaryThumbstick);
         }
 
         /// <summary>
@@ -449,7 +593,7 @@ namespace VRTK
         /// <returns>Returns true if the button has just been released.</returns>
         public override bool IsTouchpadPressedUpOnIndex(uint index)
         {
-            return false;
+            return IsButtonPressed(index, ButtonPressTypes.PressUp, OVRInput.Button.PrimaryThumbstick);
         }
 
         /// <summary>
@@ -459,7 +603,7 @@ namespace VRTK
         /// <returns>Returns true if the button is continually being touched.</returns>
         public override bool IsTouchpadTouchedOnIndex(uint index)
         {
-            return false;
+            return IsButtonPressed(index, ButtonPressTypes.Touch, OVRInput.Touch.PrimaryThumbstick);
         }
 
         /// <summary>
@@ -469,7 +613,7 @@ namespace VRTK
         /// <returns>Returns true if the button has just been touched down.</returns>
         public override bool IsTouchpadTouchedDownOnIndex(uint index)
         {
-            return false;
+            return IsButtonPressed(index, ButtonPressTypes.TouchDown, OVRInput.Touch.PrimaryThumbstick);
         }
 
         /// <summary>
@@ -479,7 +623,7 @@ namespace VRTK
         /// <returns>Returns true if the button has just been released.</returns>
         public override bool IsTouchpadTouchedUpOnIndex(uint index)
         {
-            return false;
+            return IsButtonPressed(index, ButtonPressTypes.TouchUp, OVRInput.Touch.PrimaryThumbstick);
         }
 
         /// <summary>
@@ -489,7 +633,7 @@ namespace VRTK
         /// <returns>Returns true if the button is continually being pressed.</returns>
         public override bool IsButtonOnePressedOnIndex(uint index)
         {
-            return false;
+            return IsButtonPressed(index, ButtonPressTypes.Press, OVRInput.Button.One);
         }
 
         /// <summary>
@@ -499,7 +643,7 @@ namespace VRTK
         /// <returns>Returns true if the button has just been pressed down.</returns>
         public override bool IsButtonOnePressedDownOnIndex(uint index)
         {
-            return false;
+            return IsButtonPressed(index, ButtonPressTypes.PressDown, OVRInput.Button.One);
         }
 
         /// <summary>
@@ -509,7 +653,7 @@ namespace VRTK
         /// <returns>Returns true if the button has just been released.</returns>
         public override bool IsButtonOnePressedUpOnIndex(uint index)
         {
-            return false;
+            return IsButtonPressed(index, ButtonPressTypes.PressUp, OVRInput.Button.One);
         }
 
         /// <summary>
@@ -519,7 +663,7 @@ namespace VRTK
         /// <returns>Returns true if the button is continually being touched.</returns>
         public override bool IsButtonOneTouchedOnIndex(uint index)
         {
-            return false;
+            return IsButtonPressed(index, ButtonPressTypes.Touch, OVRInput.Touch.One);
         }
 
         /// <summary>
@@ -529,7 +673,7 @@ namespace VRTK
         /// <returns>Returns true if the button has just been touched down.</returns>
         public override bool IsButtonOneTouchedDownOnIndex(uint index)
         {
-            return false;
+            return IsButtonPressed(index, ButtonPressTypes.TouchDown, OVRInput.Touch.One);
         }
 
         /// <summary>
@@ -539,7 +683,7 @@ namespace VRTK
         /// <returns>Returns true if the button has just been released.</returns>
         public override bool IsButtonOneTouchedUpOnIndex(uint index)
         {
-            return false;
+            return IsButtonPressed(index, ButtonPressTypes.TouchUp, OVRInput.Touch.One);
         }
 
         /// <summary>
@@ -549,7 +693,7 @@ namespace VRTK
         /// <returns>Returns true if the button is continually being pressed.</returns>
         public override bool IsButtonTwoPressedOnIndex(uint index)
         {
-            return false;
+            return IsButtonPressed(index, ButtonPressTypes.Press, OVRInput.Button.Two);
         }
 
         /// <summary>
@@ -559,7 +703,7 @@ namespace VRTK
         /// <returns>Returns true if the button has just been pressed down.</returns>
         public override bool IsButtonTwoPressedDownOnIndex(uint index)
         {
-            return false;
+            return IsButtonPressed(index, ButtonPressTypes.PressDown, OVRInput.Button.Two);
         }
 
         /// <summary>
@@ -569,7 +713,7 @@ namespace VRTK
         /// <returns>Returns true if the button has just been released.</returns>
         public override bool IsButtonTwoPressedUpOnIndex(uint index)
         {
-            return false;
+            return IsButtonPressed(index, ButtonPressTypes.PressUp, OVRInput.Button.Two);
         }
 
         /// <summary>
@@ -579,7 +723,7 @@ namespace VRTK
         /// <returns>Returns true if the button is continually being touched.</returns>
         public override bool IsButtonTwoTouchedOnIndex(uint index)
         {
-            return false;
+            return IsButtonPressed(index, ButtonPressTypes.Touch, OVRInput.Touch.Two);
         }
 
         /// <summary>
@@ -589,7 +733,7 @@ namespace VRTK
         /// <returns>Returns true if the button has just been touched down.</returns>
         public override bool IsButtonTwoTouchedDownOnIndex(uint index)
         {
-            return false;
+            return IsButtonPressed(index, ButtonPressTypes.TouchDown, OVRInput.Touch.Two);
         }
 
         /// <summary>
@@ -599,7 +743,145 @@ namespace VRTK
         /// <returns>Returns true if the button has just been released.</returns>
         public override bool IsButtonTwoTouchedUpOnIndex(uint index)
         {
+            return IsButtonPressed(index, ButtonPressTypes.TouchUp, OVRInput.Touch.Two);
+        }
+
+        [RuntimeInitializeOnLoadMethod]
+        private void Initialise()
+        {
+            SetTrackedControllerCaches(true);
+        }
+
+        private void SetTrackedControllerCaches(bool forceRefresh = false)
+        {
+            if (forceRefresh)
+            {
+                cachedLeftController = null;
+                cachedRightController = null;
+            }
+
+            var sdkManager = VRTK_SDKManager.instance;
+            if (sdkManager != null)
+            {
+                if (cachedLeftController == null && sdkManager.actualLeftController)
+                {
+                    cachedLeftController = sdkManager.actualLeftController.GetComponent<VRTK_TrackedController>();
+                    cachedLeftController.index = 0;
+                }
+                if (cachedRightController == null && sdkManager.actualRightController)
+                {
+                    cachedRightController = sdkManager.actualRightController.GetComponent<VRTK_TrackedController>();
+                    cachedRightController.index = 1;
+                }
+            }
+
+            SetFloorLevel();
+        }
+
+        private void SetFloorLevel()
+        {
+            if (!floorLevelSet)
+            {
+                floorLevelSet = true;
+                var ovrManager = FindObjectOfType<OVRManager>();
+                if (ovrManager)
+                {
+                    ovrManager.trackingOriginType = OVRManager.TrackingOrigin.FloorLevel;
+                }
+            }
+        }
+
+        private VRTK_TrackedController GetTrackedObject(GameObject controller)
+        {
+            SetTrackedControllerCaches();
+            VRTK_TrackedController trackedObject = null;
+
+            if (IsControllerLeftHand(controller))
+            {
+                trackedObject = cachedLeftController;
+            }
+            else if (IsControllerRightHand(controller))
+            {
+                trackedObject = cachedRightController;
+            }
+            return trackedObject;
+        }
+
+        private bool IsButtonPressed(uint index, ButtonPressTypes type, OVRInput.Button button)
+        {
+            if (index >= uint.MaxValue)
+            {
+                return false;
+            }
+
+            var device = GetTrackedObject(GetControllerByIndex(index));
+            if (device)
+            {
+                var controller = touchControllers[index];
+                switch (type)
+                {
+                    case ButtonPressTypes.Press:
+                        return OVRInput.Get(button, controller);
+                    case ButtonPressTypes.PressDown:
+                        return OVRInput.GetDown(button, controller);
+                    case ButtonPressTypes.PressUp:
+                        return OVRInput.GetUp(button, controller);
+                }
+            }
+
             return false;
         }
+
+        private bool IsButtonPressed(uint index, ButtonPressTypes type, OVRInput.Touch button)
+        {
+            if (index >= uint.MaxValue)
+            {
+                return false;
+            }
+
+            var device = GetTrackedObject(GetControllerByIndex(index));
+            if (device)
+            {
+                var controller = touchControllers[index];
+                switch (type)
+                {
+                    case ButtonPressTypes.Touch:
+                        return OVRInput.Get(button, controller);
+                    case ButtonPressTypes.TouchDown:
+                        return OVRInput.GetDown(button, controller);
+                    case ButtonPressTypes.TouchUp:
+                        return OVRInput.GetUp(button, controller);
+                }
+            }
+
+            return false;
+        }
+
+        private void UpdateHairValues(uint index, float axisValue, float hairDelta, ref bool previousState, ref bool currentState, ref float hairLimit)
+        {
+            previousState = currentState;
+            var value = axisValue;
+            if (currentState)
+            {
+                if (value < (hairLimit - hairDelta) || value <= 0f)
+                {
+                    currentState = false;
+                }
+            }
+            else
+            {
+                if (value > (hairLimit + hairDelta) || value >= 1f)
+                {
+                    currentState = true;
+                }
+            }
+
+            hairLimit = (currentState ? Mathf.Max(hairLimit, value) : Mathf.Min(hairLimit, value));
+        }
     }
+#else
+    public class SDK_OculusVRController : SDK_FallbackController
+    {
+    }
+#endif
 }

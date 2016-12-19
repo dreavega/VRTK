@@ -2,6 +2,7 @@
 namespace VRTK
 {
     using UnityEngine;
+    using System.Collections.Generic;
 
     /// <summary>
     /// The Base Controller SDK script provides a bridge to SDK methods that deal with the input devices.
@@ -67,6 +68,13 @@ namespace VRTK
             Left,
             Right
         }
+
+        /// <summary>
+        /// The ProcessUpdate method enables an SDK to run logic for every Unity Update
+        /// </summary>
+        /// <param name="index">The index of the controller.</param>
+        /// <param name="options">A dictionary of generic options that can be used to within the update.</param>
+        public abstract void ProcessUpdate(uint index, Dictionary<string, object> options);
 
         /// <summary>
         /// The GetControllerDefaultColliderPath returns the path to the prefab that contains the collider objects for the default controller of this SDK.
@@ -547,6 +555,24 @@ namespace VRTK
                 }
             }
             return null;
+        }
+
+        protected GameObject GetActualController(GameObject controller)
+        {
+            GameObject returnController = null;
+            var sdkManager = VRTK_SDKManager.instance;
+            if (sdkManager != null)
+            {
+                if (IsControllerLeftHand(controller))
+                {
+                    returnController = sdkManager.actualLeftController;
+                }
+                else if (IsControllerRightHand(controller))
+                {
+                    returnController = sdkManager.actualRightController;
+                }
+            }
+            return returnController;
         }
     }
 }
